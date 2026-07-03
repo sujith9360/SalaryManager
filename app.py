@@ -1,7 +1,33 @@
+"""
+app.py — Salary Quest (multi-user, database-backed edition)
+
+HOW LOGIN WORKS (no password, mobile-number only):
+  1. User types their 10-digit mobile number.
+  2. We check the `users` table in the database (see db.py):
+       - Number found  -> we load ALL their saved settings straight into
+                           st.session_state and drop them on the dashboard.
+                           They never see the setup wizard again.
+       - Number NOT found -> we send them through the one-time setup wizard,
+                           and at the very end we INSERT a new row for them.
+  3. From then on, every time they change something in the sidebar, we
+     immediately UPDATE their row in the database — so refreshing the page,
+     or coming back tomorrow and logging in with the same number, shows
+     the exact same data.
+
+NOTE ON "LOGIN ONLY ONCE": Streamlit apps don't have real browser sessions
+  across tab closes/reopens without extra cookie libraries. What this app
+  does give you: once you log in, you stay logged in for as long as that
+  browser tab / Streamlit session is open — you won't be asked again while
+  using the app. If you close the tab and come back, you enter your mobile
+  number again — but because it's the SAME number, all your data is right
+  there waiting (nothing is lost, nothing needs re-entering).
+"""
+
 import streamlit as st
 import pandas as pd
 from datetime import date
 import calendar
+import db
 
 st.set_page_config(
     page_title="Salary Quest",
@@ -10,62 +36,43 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Make sure the tables exist before we do anything else.
+db.init_db()
+
+# ─────────────────────────────────────────────
+# COLOR PALETTE — iOS-style glass: dark translucent panels,
+# blurred color "wallpaper" glowing through, color used ONLY
+# for status accents (not as the base UI color like before).
+# ─────────────────────────────────────────────
 C = {
-    "bg":        "#E8EDF2",
-    "bg_warm":   "#EEF1F5",
-    "bg_card":   "#E4E9EF",
-    "bg_inset":  "#D8DEE6",
-    "bg_white":  "#F0F4F8",
-    "surface":   "#E8EDF2",
-    "neo_light": "#FFFFFF",
-    "neo_dark":  "#C8CED6",
-    "neo_dark2": "#B8BFC8",
-    "primary":      "#6C5CE7",
-    "primary_lt":   "#A29BFE",
-    "primary_dk":   "#5A4BD1",
-    "primary_bg":   "rgba(108,92,231,0.10)",
-    "primary_bg2":  "rgba(108,92,231,0.06)",
-    "gold":      "#F59E0B",
-    "gold_lt":   "#FBBF24",
-    "gold_dk":   "#D97706",
-    "gold_bg":   "rgba(245,158,11,0.10)",
-    "teal":      "#0EA5E9",
-    "teal_bg":   "rgba(14,165,233,0.10)",
-    "green":     "#10B981",
-    "green_lt":  "#34D399",
-    "green_bg":  "rgba(16,185,129,0.10)",
-    "orange":    "#F97316",
-    "orange_bg": "rgba(249,115,22,0.10)",
-    "red":       "#EF4444",
-    "red_lt":    "#F87171",
-    "red_bg":    "rgba(239,68,68,0.08)",
-    "text":      "#1E293B",
-    "text2":     "#475569",
-    "text3":     "#94A3B8",
-    "text4":     "#CBD5E1",
-    "white":     "#FFFFFF",
+    "text":  "#F5F6FA", "text2": "#C6C9D8", "text3": "#9295A8", "text4": "rgba(255,255,255,0.14)",
+    "white": "#FFFFFF",
+    "primary": "#7C8CFF", "primary_dk": "#5B6CFF", "primary_bg": "rgba(124,140,255,0.16)",
+    "gold": "#FFB454", "gold_dk": "#E89A2E", "gold_bg": "rgba(255,180,84,0.14)",
+    "teal": "#64D2FF", "teal_bg": "rgba(100,210,255,0.14)",
+    "green": "#30D158", "green_lt": "#5EE87A", "green_bg": "rgba(48,209,88,0.14)",
+    "orange": "#FF9F0A", "orange_bg": "rgba(255,159,10,0.14)",
+    "red": "#FF453A", "red_lt": "#FF6961", "red_bg": "rgba(255,69,58,0.14)",
 }
 
-def neo_raised(radius=20, intensity=1):
-    return (f"background: {C['bg']};"
+def glass(radius=20, blur=22, alpha=0.09, border=0.16, glow=""):
+    """The core 'iPhone glass' look: a blurred, translucent panel with a
+    faint light border on top (like light catching the edge of real glass)."""
+    return (f"background: rgba(255,255,255,{alpha});"
+            f"backdrop-filter: blur({blur}px) saturate(180%);"
+            f"-webkit-backdrop-filter: blur({blur}px) saturate(180%);"
             f"border-radius: {radius}px;"
-            f"box-shadow: {6*intensity}px {6*intensity}px {14*intensity}px {C['neo_dark']},"
-            f" -{6*intensity}px -{6*intensity}px {14*intensity}px {C['neo_light']};"
-            f"border: 1px solid rgba(255,255,255,0.6);")
+            f"border: 1px solid rgba(255,255,255,{border});"
+            f"box-shadow: 0 8px 32px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.12){(', ' + glow) if glow else ''};")
 
-def neo_inset(radius=14):
-    return (f"background: {C['bg_inset']};"
+def glass_inset(radius=14):
+    """A 'carved into the glass' look for input fields."""
+    return (f"background: rgba(0,0,0,0.22);"
+            f"backdrop-filter: blur(12px);"
+            f"-webkit-backdrop-filter: blur(12px);"
             f"border-radius: {radius}px;"
-            f"box-shadow: inset 3px 3px 7px {C['neo_dark']},"
-            f" inset -3px -3px 7px {C['neo_light']};"
-            f"border: none;")
-
-def neo_flat(radius=16):
-    return (f"background: {C['bg']};"
-            f"border-radius: {radius}px;"
-            f"box-shadow: 4px 4px 10px {C['neo_dark']},"
-            f" -4px -4px 10px {C['neo_light']};"
-            f"border: 1px solid rgba(255,255,255,0.5);")
+            f"border: 1px solid rgba(255,255,255,0.08);"
+            f"box-shadow: inset 0 2px 8px rgba(0,0,0,0.4);")
 
 st.markdown(f"""
 <style>
@@ -76,164 +83,112 @@ st.markdown(f"""
 html, body, [class*="css"], .stApp {{
     font-family: 'Plus Jakarta Sans', sans-serif !important;
     color: {C['text']} !important;
-    background: {C['bg']} !important;
+}}
+.stApp {{
+    background:
+        radial-gradient(at 15% 15%, rgba(124,140,255,0.30), transparent 45%),
+        radial-gradient(at 85% 5%,  rgba(100,210,255,0.22), transparent 45%),
+        radial-gradient(at 50% 100%, rgba(255,159,10,0.16), transparent 50%),
+        linear-gradient(160deg, #0A0B12 0%, #14151F 100%) !important;
+    background-attachment: fixed !important;
 }}
 #MainMenu, footer, header {{ visibility: hidden; }}
 ::-webkit-scrollbar {{ width: 8px; }}
-::-webkit-scrollbar-track {{ background: {C['bg']}; }}
-::-webkit-scrollbar-thumb {{ background: {C['neo_dark']}; border-radius: 99px; }}
+::-webkit-scrollbar-track {{ background: transparent; }}
+::-webkit-scrollbar-thumb {{ background: rgba(255,255,255,0.15); border-radius: 99px; }}
 
 section[data-testid="stSidebar"] {{
-    background: linear-gradient(180deg, {C['bg_warm']} 0%, {C['bg']} 100%) !important;
-    border-right: none !important;
-    box-shadow: 4px 0 20px rgba(0,0,0,0.06) !important;
+    background: rgba(10,11,18,0.55) !important;
+    backdrop-filter: blur(30px) saturate(160%) !important;
+    -webkit-backdrop-filter: blur(30px) saturate(160%) !important;
+    border-right: 1px solid rgba(255,255,255,0.08) !important;
     width: 330px !important;
 }}
 section[data-testid="stSidebar"] > div {{ padding: 0 !important; }}
 .main .block-container {{ padding: 1.6rem 2.2rem 3rem !important; max-width: 1460px; }}
 
-h1, h2, h3 {{
-    font-family: 'Bricolage Grotesque', sans-serif !important;
-    color: {C['text']} !important;
-}}
+h1, h2, h3 {{ font-family: 'Bricolage Grotesque', sans-serif !important; color: {C['text']} !important; }}
 
 label, div[data-testid="stWidgetLabel"] p, .stRadio label span {{
     color: {C['text2']} !important;
-    font-size: 11.5px !important;
-    font-weight: 700 !important;
-    text-transform: uppercase !important;
-    letter-spacing: 0.08em !important;
+    font-size: 11.5px !important; font-weight: 700 !important;
+    text-transform: uppercase !important; letter-spacing: 0.08em !important;
 }}
 
 .stTextInput input, .stNumberInput input, .stDateInput input {{
-    {neo_inset(12)}
+    {glass_inset(12)}
     color: {C['text']} !important;
-    font-size: 14px !important;
-    font-weight: 600 !important;
-    padding: 11px 14px !important;
-    transition: all .2s ease;
+    font-size: 14px !important; font-weight: 600 !important;
+    padding: 11px 14px !important; transition: all .2s ease;
 }}
 .stTextInput input:focus, .stNumberInput input:focus, .stDateInput input:focus {{
-    box-shadow: inset 2px 2px 5px {C['neo_dark']}, inset -2px -2px 5px {C['neo_light']}, 0 0 0 3px {C['primary_bg']} !important;
+    box-shadow: inset 0 2px 8px rgba(0,0,0,0.4), 0 0 0 3px {C['primary_bg']} !important;
     outline: none !important;
 }}
 .stTextInput input::placeholder {{ color: {C['text3']} !important; font-weight: 500; }}
 .stNumberInput > div > div, .stDateInput > div, .stTextInput > div {{ background: transparent !important; }}
 button[data-testid="stNumberInputStepDown"], button[data-testid="stNumberInputStepUp"] {{
-    background: {C['bg']} !important;
-    color: {C['text2']} !important;
-    border: none !important;
-    border-radius: 8px !important;
-    box-shadow: 2px 2px 5px {C['neo_dark']}, -2px -2px 5px {C['neo_light']};
+    background: rgba(255,255,255,0.06) !important; color: {C['text2']} !important;
+    border: 1px solid rgba(255,255,255,0.1) !important; border-radius: 8px !important;
 }}
 
-.stSelectbox > div > div {{
-    {neo_inset(12)}
-    color: {C['text']} !important;
-    font-weight: 600 !important;
-}}
+.stSelectbox > div > div {{ {glass_inset(12)} color: {C['text']} !important; font-weight: 600 !important; }}
 .stSelectbox svg {{ fill: {C['text2']} !important; }}
 div[data-baseweb="popover"] {{
-    background: {C['bg_white']} !important;
-    border: 1px solid {C['text4']} !important;
+    background: rgba(20,21,31,0.92) !important;
+    backdrop-filter: blur(24px) !important;
+    border: 1px solid rgba(255,255,255,0.12) !important;
     border-radius: 16px !important;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.10) !important;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5) !important;
 }}
 div[data-baseweb="popover"] li {{ color: {C['text']} !important; font-weight: 600 !important; }}
 div[data-baseweb="popover"] li:hover {{ background: {C['primary_bg']} !important; }}
 
 .stRadio [role="radiogroup"] {{ display:flex; gap:10px; flex-wrap:wrap; }}
 .stRadio [role="radiogroup"] label {{
-    {neo_raised(99, 0.6)}
-    padding: 9px 20px !important;
-    font-size: 13px !important;
-    font-weight: 700 !important;
-    color: {C['text2']} !important;
-    text-transform: none !important;
-    letter-spacing: 0 !important;
-    cursor: pointer !important;
-    transition: all .15s ease;
+    {glass(99, 14, 0.06, 0.14)}
+    padding: 9px 20px !important; font-size: 13px !important; font-weight: 700 !important;
+    color: {C['text2']} !important; text-transform: none !important; letter-spacing: 0 !important;
+    cursor: pointer !important; transition: all .15s ease;
 }}
 .stRadio [role="radiogroup"] label:has(input:checked) {{
     background: linear-gradient(135deg, {C['primary']}, {C['primary_dk']}) !important;
-    color: {C['white']} !important;
-    border: none !important;
-    box-shadow: 3px 3px 8px {C['neo_dark']}, -3px -3px 8px {C['neo_light']};
+    color: {C['white']} !important; border: 1px solid rgba(255,255,255,0.25) !important;
+    box-shadow: 0 4px 16px rgba(124,140,255,0.35);
 }}
 
-.stSlider [data-baseweb="slider"] [role="slider"] {{
-    background: {C['primary']} !important;
-    box-shadow: 0 2px 8px rgba(108,92,231,0.35) !important;
-}}
-.stSlider [data-baseweb="slider"] > div > div {{
-    background: {C['primary_lt']} !important;
-}}
+.stSlider [data-baseweb="slider"] [role="slider"] {{ background: {C['primary']} !important; box-shadow: 0 2px 10px rgba(124,140,255,0.5) !important; }}
+.stSlider [data-baseweb="slider"] > div > div {{ background: {C['primary']} !important; opacity: 0.5; }}
 
 .stButton > button {{
     font-family: 'Plus Jakarta Sans', sans-serif !important;
-    font-weight: 800 !important;
-    font-size: 14px !important;
-    {neo_raised(14, 0.8)}
-    color: {C['text']} !important;
-    padding: 12px 22px !important;
-    width: 100% !important;
-    transition: all .15s ease !important;
+    font-weight: 800 !important; font-size: 14px !important;
+    {glass(14, 16, 0.07, 0.16)}
+    color: {C['text']} !important; padding: 12px 22px !important;
+    width: 100% !important; transition: all .15s ease !important;
 }}
-.stButton > button:hover {{
-    box-shadow: 2px 2px 5px {C['neo_dark']}, -2px -2px 5px {C['neo_light']};
-    transform: translateY(1px);
-}}
+.stButton > button:hover {{ background: rgba(255,255,255,0.13) !important; transform: translateY(-1px); }}
 .stButton > button[kind="primary"] {{
     background: linear-gradient(135deg, {C['primary']}, {C['primary_dk']}) !important;
-    color: {C['white']} !important;
-    border: none !important;
-    box-shadow: 4px 4px 12px {C['neo_dark']}, -4px -4px 12px {C['neo_light']};
+    color: {C['white']} !important; border: 1px solid rgba(255,255,255,0.25) !important;
+    box-shadow: 0 8px 24px rgba(124,140,255,0.4);
 }}
 
-[data-testid="stDataFrame"] {{
-    border-radius: 16px !important;
-    overflow: hidden !important;
-    box-shadow: 4px 4px 10px {C['neo_dark']}, -4px -4px 10px {C['neo_light']};
-}}
+[data-testid="stDataFrame"] {{ border-radius: 16px !important; overflow: hidden !important; border: 1px solid rgba(255,255,255,0.1); }}
 hr {{ border-color: {C['text4']} !important; margin: 1.4rem 0 !important; }}
 
-details {{
-    {neo_raised(16, 0.6)}
-    overflow: hidden !important;
-    margin-bottom: 8px !important;
-}}
-details summary {{
-    color: {C['text']} !important;
-    font-weight: 700 !important;
-    padding: 14px 18px !important;
-}}
+details {{ {glass(16, 16, 0.06, 0.14)} overflow: hidden !important; margin-bottom: 8px !important; }}
+details summary {{ color: {C['text']} !important; font-weight: 700 !important; padding: 14px 18px !important; }}
 
-.stTabs [data-baseweb="tab-list"] {{
-    {neo_raised(16, 0.5)}
-    padding: 6px !important;
-    gap: 4px !important;
-}}
-.stTabs [data-baseweb="tab"] {{
-    background: transparent !important;
-    border-radius: 12px !important;
-    color: {C['text2']} !important;
-    font-weight: 700 !important;
-    font-size: 13px !important;
-    padding: 10px 20px !important;
-    border: none !important;
-}}
+.stTabs [data-baseweb="tab-list"] {{ {glass(16, 16, 0.05, 0.12)} padding: 6px !important; gap: 4px !important; }}
+.stTabs [data-baseweb="tab"] {{ background: transparent !important; border-radius: 12px !important; color: {C['text2']} !important; font-weight: 700 !important; font-size: 13px !important; padding: 10px 20px !important; border: none !important; }}
 .stTabs [aria-selected="true"] {{
-    background: {C['white']} !important;
-    color: {C['primary']} !important;
-    box-shadow: 2px 2px 6px {C['neo_dark']}, -2px -2px 6px {C['neo_light']};
-    font-weight: 800 !important;
+    background: rgba(255,255,255,0.12) !important; color: {C['white']} !important;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.25); font-weight: 800 !important;
 }}
 .stTabs [data-baseweb="tab-panel"] {{ padding-top: 1.4rem !important; }}
 
-div[data-testid="stMetric"] {{
-    {neo_raised(16, 0.6)}
-    padding: 16px 18px !important;
-}}
+div[data-testid="stMetric"] {{ {glass(16, 16, 0.07, 0.15)} padding: 16px 18px !important; }}
 
 /* ══════ CUSTOM COMPONENTS ══════ */
 .page-header {{ margin-bottom: 1.8rem; }}
@@ -241,204 +196,123 @@ div[data-testid="stMetric"] {{
     display: inline-flex; align-items: center; gap: 6px;
     background: linear-gradient(135deg, {C['primary']}, {C['primary_dk']});
     color: {C['white']}; border-radius: 99px; padding: 6px 16px;
-    font-size: 11px; font-weight: 800; letter-spacing: .07em;
-    text-transform: uppercase; margin-bottom: 14px;
-    box-shadow: 0 4px 14px rgba(108,92,231,0.30);
+    font-size: 11px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase;
+    margin-bottom: 14px; box-shadow: 0 4px 20px rgba(124,140,255,0.4);
 }}
-.page-title {{
-    font-family: 'Bricolage Grotesque', sans-serif;
-    font-size: 38px; font-weight: 800; color: {C['text']};
-    letter-spacing: -0.01em; line-height: 1.15;
-}}
-.page-title span {{
-    background: linear-gradient(135deg, {C['gold']}, {C['gold_dk']});
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-}}
-.page-sub {{
-    font-size: 14.5px; color: {C['text2']};
-    max-width: 640px; line-height: 1.65; margin-top: 8px; font-weight: 500;
-}}
+.page-title {{ font-family: 'Bricolage Grotesque', sans-serif; font-size: 38px; font-weight: 800; color: {C['text']}; letter-spacing: -0.01em; line-height: 1.15; }}
+.page-title span {{ background: linear-gradient(135deg, {C['gold']}, {C['gold_dk']}); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }}
+.page-sub {{ font-size: 14.5px; color: {C['text2']}; max-width: 640px; line-height: 1.65; margin-top: 8px; font-weight: 500; }}
 
-.sec-title {{
-    font-family: 'Bricolage Grotesque', sans-serif;
-    font-size: 17px; font-weight: 700; color: {C['text']};
-    margin-bottom: 4px; letter-spacing: -0.01em;
-}}
+.sec-title {{ font-family: 'Bricolage Grotesque', sans-serif; font-size: 17px; font-weight: 700; color: {C['text']}; margin-bottom: 4px; letter-spacing: -0.01em; }}
 .sec-sub {{ font-size: 12.5px; color: {C['text3']}; margin-bottom: 16px; font-weight: 500; }}
 
-.neo-card {{ {neo_raised(20, 1)} padding: 24px; margin-bottom: 20px; }}
-.neo-card-sm {{ {neo_raised(14, 0.6)} padding: 16px; }}
-.neo-card.glow-primary {{ box-shadow: 6px 6px 14px {C['neo_dark']}, -6px -6px 14px {C['neo_light']}, 0 0 20px rgba(108,92,231,0.12); }}
-.neo-card.glow-gold {{ box-shadow: 6px 6px 14px {C['neo_dark']}, -6px -6px 14px {C['neo_light']}, 0 0 20px rgba(245,158,11,0.12); }}
-.neo-card.glow-red {{ box-shadow: 6px 6px 14px {C['neo_dark']}, -6px -6px 14px {C['neo_light']}, 0 0 28px rgba(239,68,68,0.18); }}
-.neo-card.glow-green {{ box-shadow: 6px 6px 14px {C['neo_dark']}, -6px -6px 14px {C['neo_light']}, 0 0 22px rgba(16,185,129,0.15); }}
-.neo-card.glow-orange {{ box-shadow: 6px 6px 14px {C['neo_dark']}, -6px -6px 14px {C['neo_light']}, 0 0 22px rgba(249,115,22,0.15); }}
+.neo-card {{ {glass(20, 24, 0.07, 0.15)} padding: 24px; margin-bottom: 20px; }}
+.neo-card-sm {{ {glass(14, 18, 0.06, 0.13)} padding: 16px; }}
+.neo-card.glow-primary {{ box-shadow: 0 8px 32px rgba(0,0,0,0.35), 0 0 30px rgba(124,140,255,0.18); }}
+.neo-card.glow-gold    {{ box-shadow: 0 8px 32px rgba(0,0,0,0.35), 0 0 30px rgba(255,180,84,0.16); }}
+.neo-card.glow-red      {{ box-shadow: 0 8px 32px rgba(0,0,0,0.35), 0 0 34px rgba(255,69,58,0.22); }}
+.neo-card.glow-green    {{ box-shadow: 0 8px 32px rgba(0,0,0,0.35), 0 0 30px rgba(48,209,88,0.18); }}
+.neo-card.glow-orange   {{ box-shadow: 0 8px 32px rgba(0,0,0,0.35), 0 0 30px rgba(255,159,10,0.18); }}
 
-.stat-pill {{ {neo_raised(16, 0.7)} padding: 18px; text-align: center; }}
+.stat-pill {{ {glass(16, 18, 0.07, 0.14)} padding: 18px; text-align: center; }}
 .stat-pill .s-label {{ font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: {C['text3']}; margin-bottom: 8px; }}
 .stat-pill .s-value {{ font-family: 'JetBrains Mono', monospace; font-size: 21px; font-weight: 700; color: {C['text']}; }}
 .stat-pill .s-sub {{ font-size: 10.5px; color: {C['text3']}; margin-top: 5px; font-weight: 600; }}
 
 .hero-stat {{
-    background: linear-gradient(145deg, {C['primary_bg']}, {C['bg']});
-    border: 1px solid rgba(108,92,231,0.15); border-radius: 22px; padding: 24px; text-align: center;
-    box-shadow: 6px 6px 16px {C['neo_dark']}, -6px -6px 16px {C['neo_light']}, inset 0 1px 0 rgba(255,255,255,0.8);
+    background: linear-gradient(160deg, rgba(124,140,255,0.18), rgba(255,255,255,0.04));
+    backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
+    border: 1px solid rgba(255,255,255,0.18); border-radius: 22px; padding: 24px; text-align: center;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.15);
 }}
 .hero-stat .hs-label {{ font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; color: {C['primary']}; margin-bottom: 8px; }}
 .hero-stat .hs-value {{ font-family: 'Bricolage Grotesque', sans-serif; font-size: 38px; font-weight: 800; color: {C['text']}; }}
 .hero-stat .hs-sub {{ font-size: 12px; color: {C['text2']}; margin-top: 6px; font-weight: 600; }}
 
 /* ═══ BIG WARNING BANNERS ═══ */
-.warn-banner {{
-    border-radius: 20px; padding: 22px 24px; margin: 12px 0;
-    display: flex; align-items: flex-start; gap: 16px;
-    border: 2px solid; position: relative; overflow: hidden;
-}}
-.warn-banner::before {{
-    content: ''; position: absolute;
-    top: 0; left: 0; right: 0; height: 3px;
-    border-radius: 20px 20px 0 0;
-}}
-.warn-banner.critical {{
-    background: linear-gradient(135deg, rgba(239,68,68,0.08), rgba(239,68,68,0.04));
-    border-color: rgba(239,68,68,0.35);
-    box-shadow: 6px 6px 14px {C['neo_dark']}, -6px -6px 14px {C['neo_light']}, 0 0 30px rgba(239,68,68,0.12);
-}}
+.warn-banner {{ border-radius: 20px; padding: 22px 24px; margin: 12px 0; display: flex; align-items: flex-start; gap: 16px; border: 1px solid; position: relative; overflow: hidden; backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }}
+.warn-banner::before {{ content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; border-radius: 20px 20px 0 0; }}
+.warn-banner.critical {{ background: linear-gradient(135deg, rgba(255,69,58,0.14), rgba(255,69,58,0.05)); border-color: rgba(255,69,58,0.35); box-shadow: 0 8px 32px rgba(0,0,0,0.3), 0 0 32px rgba(255,69,58,0.18); }}
 .warn-banner.critical::before {{ background: linear-gradient(90deg, {C['red']}, {C['red_lt']}); }}
-.warn-banner.caution {{
-    background: linear-gradient(135deg, rgba(249,115,22,0.08), rgba(249,115,22,0.04));
-    border-color: rgba(249,115,22,0.35);
-    box-shadow: 6px 6px 14px {C['neo_dark']}, -6px -6px 14px {C['neo_light']}, 0 0 30px rgba(249,115,22,0.10);
-}}
-.warn-banner.caution::before {{ background: linear-gradient(90deg, {C['orange']}, {C['gold_lt']}); }}
-.warn-banner.safe {{
-    background: linear-gradient(135deg, rgba(16,185,129,0.08), rgba(16,185,129,0.04));
-    border-color: rgba(16,185,129,0.35);
-    box-shadow: 6px 6px 14px {C['neo_dark']}, -6px -6px 14px {C['neo_light']}, 0 0 20px rgba(16,185,129,0.10);
-}}
+.warn-banner.caution {{ background: linear-gradient(135deg, rgba(255,159,10,0.14), rgba(255,159,10,0.05)); border-color: rgba(255,159,10,0.35); box-shadow: 0 8px 32px rgba(0,0,0,0.3), 0 0 32px rgba(255,159,10,0.14); }}
+.warn-banner.caution::before {{ background: linear-gradient(90deg, {C['orange']}, {C['gold']}); }}
+.warn-banner.safe {{ background: linear-gradient(135deg, rgba(48,209,88,0.14), rgba(48,209,88,0.05)); border-color: rgba(48,209,88,0.35); box-shadow: 0 8px 32px rgba(0,0,0,0.3), 0 0 26px rgba(48,209,88,0.14); }}
 .warn-banner.safe::before {{ background: linear-gradient(90deg, {C['green']}, {C['green_lt']}); }}
-.warn-banner.info-blue {{
-    background: linear-gradient(135deg, rgba(14,165,233,0.08), rgba(14,165,233,0.04));
-    border-color: rgba(14,165,233,0.35);
-    box-shadow: 6px 6px 14px {C['neo_dark']}, -6px -6px 14px {C['neo_light']}, 0 0 20px rgba(14,165,233,0.10);
-}}
-.warn-banner.info-blue::before {{ background: linear-gradient(90deg, {C['teal']}, {C['primary_lt']}); }}
+.warn-banner.info-blue {{ background: linear-gradient(135deg, rgba(100,210,255,0.14), rgba(100,210,255,0.05)); border-color: rgba(100,210,255,0.35); box-shadow: 0 8px 32px rgba(0,0,0,0.3), 0 0 26px rgba(100,210,255,0.14); }}
+.warn-banner.info-blue::before {{ background: linear-gradient(90deg, {C['teal']}, {C['primary']}); }}
 
-.warn-icon {{
-    font-size: 32px; flex-shrink: 0; line-height: 1;
-    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.15));
-}}
-.warn-title {{
-    font-family: 'Bricolage Grotesque', sans-serif;
-    font-size: 17px; font-weight: 800; margin-bottom: 4px;
-}}
+.warn-icon {{ font-size: 32px; flex-shrink: 0; line-height: 1; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.3)); }}
+.warn-title {{ font-family: 'Bricolage Grotesque', sans-serif; font-size: 17px; font-weight: 800; margin-bottom: 4px; }}
 .warn-body {{ font-size: 13.5px; font-weight: 500; line-height: 1.6; color: {C['text2']}; }}
-.warn-body b {{ font-weight: 800; }}
+.warn-body b {{ font-weight: 800; color: {C['text']}; }}
 
-/* Budget meter strip */
-.budget-meter {{
-    {neo_raised(16, 0.8)}
-    padding: 20px; margin: 14px 0;
-}}
+.budget-meter {{ {glass(16, 20, 0.07, 0.15)} padding: 20px; margin: 14px 0; }}
 .budget-meter-label {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }}
 .budget-meter-title {{ font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: {C['text3']}; }}
 .budget-meter-value {{ font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700; }}
-.budget-track {{
-    height: 18px; {neo_inset(99)} overflow: hidden; position: relative;
-}}
-.budget-fill {{
-    height: 100%; border-radius: 99px; transition: width .4s ease;
-    position: relative; overflow: hidden;
-}}
-.budget-fill::after {{
-    content: ''; position: absolute; inset: 0;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent);
-    width: 40%; animation: shimmer 2s infinite;
-}}
-@keyframes shimmer {{
-    0% {{ transform: translateX(-120%); }}
-    100% {{ transform: translateX(340%); }}
-}}
+.budget-track {{ height: 18px; {glass_inset(99)} overflow: hidden; position: relative; }}
+.budget-fill {{ height: 100%; border-radius: 99px; transition: width .4s ease; position: relative; overflow: hidden; }}
+.budget-fill::after {{ content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.45), transparent); width: 40%; animation: shimmer 2s infinite; }}
+@keyframes shimmer {{ 0% {{ transform: translateX(-120%); }} 100% {{ transform: translateX(340%); }} }}
 
-/* Live preview card */
-.preview-card {{
-    border-radius: 18px; padding: 20px;
-    border: 2px dashed {C['text4']};
-    background: {C['bg_white']};
-    box-shadow: inset 3px 3px 8px {C['neo_dark']}, inset -3px -3px 8px {C['neo_light']};
-    margin: 14px 0;
-    transition: all .3s ease;
-}}
-.preview-card.has-amount {{
-    border-style: solid;
-    box-shadow: 4px 4px 12px {C['neo_dark']}, -4px -4px 12px {C['neo_light']};
-    background: {C['bg']};
-}}
-.preview-row {{
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 8px 0; border-bottom: 1px solid {C['text4']};
-    font-size: 13.5px;
-}}
+.preview-card {{ border-radius: 18px; padding: 20px; border: 1px dashed rgba(255,255,255,0.2); background: rgba(255,255,255,0.03); backdrop-filter: blur(16px); margin: 14px 0; transition: all .3s ease; }}
+.preview-card.has-amount {{ border-style: solid; border-color: rgba(255,255,255,0.15); background: rgba(255,255,255,0.06); box-shadow: 0 8px 24px rgba(0,0,0,0.3); }}
+.preview-row {{ display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid {C['text4']}; font-size: 13.5px; }}
 .preview-row:last-child {{ border-bottom: none; padding-bottom: 0; }}
 .preview-lbl {{ color: {C['text2']}; font-weight: 600; }}
 .preview-val {{ font-family: 'JetBrains Mono', monospace; font-weight: 700; color: {C['text']}; }}
 
-/* Pill tags */
 .prog-wrap {{ margin: 14px 0; }}
 .prog-label {{ display: flex; justify-content: space-between; font-size: 12px; font-weight: 700; margin-bottom: 7px; }}
-.prog-bar {{ height: 14px; {neo_inset(99)} overflow: hidden; position: relative; }}
+.prog-bar {{ height: 14px; {glass_inset(99)} overflow: hidden; position: relative; }}
 .prog-fill {{ height: 100%; border-radius: 99px; transition: width .5s ease; position: relative; overflow: hidden; }}
-.prog-fill::after {{
-    content: ''; position: absolute; inset: 0;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent);
-    width: 40%; animation: shimmer 2.5s infinite;
-}}
+.prog-fill::after {{ content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.45), transparent); width: 40%; animation: shimmer 2.5s infinite; }}
 
 .exp-row {{ display: flex; align-items: center; gap: 14px; padding: 14px 0; border-bottom: 1px solid {C['text4']}; }}
 .exp-row:last-child {{ border-bottom: none; }}
-.exp-icon {{ width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; {neo_raised(12, 0.4)} }}
+.exp-icon {{ width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; {glass(12, 12, 0.08, 0.15)} }}
 .exp-info {{ flex: 1; min-width: 0; }}
 .exp-place {{ font-size: 14px; font-weight: 800; color: {C['text']}; }}
 .exp-meta {{ font-size: 11px; color: {C['text3']}; margin-top: 3px; font-weight: 600; }}
-.exp-amt {{ font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 700; color: {C['gold_dk']}; flex-shrink: 0; }}
+.exp-amt {{ font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 700; color: {C['gold']}; flex-shrink: 0; }}
 .exp-badge {{ font-size: 10px; font-weight: 800; padding: 4px 12px; border-radius: 99px; flex-shrink: 0; }}
-.badge-need {{ background: {C['teal_bg']}; color: {C['teal']}; border: 1px solid rgba(14,165,233,0.3); }}
-.badge-want {{ background: {C['orange_bg']}; color: {C['orange']}; border: 1px solid rgba(249,115,22,0.3); }}
+.badge-need {{ background: {C['teal_bg']}; color: {C['teal']}; border: 1px solid rgba(100,210,255,0.3); }}
+.badge-want {{ background: {C['orange_bg']}; color: {C['orange']}; border: 1px solid rgba(255,159,10,0.3); }}
 
 .tag {{ display: inline-block; padding: 4px 14px; border-radius: 99px; font-size: 11px; font-weight: 800; }}
-.tag-green {{ background: {C['green_bg']}; color: {C['green']}; border: 1px solid rgba(16,185,129,0.3); }}
-.tag-red {{ background: {C['red_bg']}; color: {C['red']}; border: 1px solid rgba(239,68,68,0.3); }}
-.tag-yellow {{ background: {C['orange_bg']}; color: {C['orange']}; border: 1px solid rgba(249,115,22,0.3); }}
-.tag-blue {{ background: {C['teal_bg']}; color: {C['teal']}; border: 1px solid rgba(14,165,233,0.3); }}
+.tag-green {{ background: {C['green_bg']}; color: {C['green']}; border: 1px solid rgba(48,209,88,0.3); }}
+.tag-red {{ background: {C['red_bg']}; color: {C['red']}; border: 1px solid rgba(255,69,58,0.3); }}
+.tag-yellow {{ background: {C['orange_bg']}; color: {C['orange']}; border: 1px solid rgba(255,159,10,0.3); }}
+.tag-blue {{ background: {C['teal_bg']}; color: {C['teal']}; border: 1px solid rgba(100,210,255,0.3); }}
 
 .bk-row {{ display: flex; justify-content: space-between; align-items: center; padding: 11px 0; border-bottom: 1px solid {C['text4']}; font-size: 13.5px; }}
 .bk-row:last-child {{ border-bottom: none; }}
 .bk-label {{ color: {C['text2']}; font-weight: 600; }}
 .bk-val {{ font-weight: 700; color: {C['text']}; font-family: 'JetBrains Mono', monospace; }}
 
-.alert-strip {{ padding: 14px 18px; border-radius: 16px; font-size: 13.5px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 10px; line-height: 1.5; border: 1px solid; }}
-.alert-strip.info {{ background: {C['teal_bg']}; border-color: rgba(14,165,233,0.25); color: {C['teal']}; }}
-.alert-strip.success {{ background: {C['green_bg']}; border-color: rgba(16,185,129,0.25); color: {C['green']}; }}
-.alert-strip.warning {{ background: {C['orange_bg']}; border-color: rgba(249,115,22,0.25); color: {C['orange']}; }}
-.alert-strip.danger {{ background: {C['red_bg']}; border-color: rgba(239,68,68,0.25); color: {C['red']}; }}
+.alert-strip {{ padding: 14px 18px; border-radius: 16px; font-size: 13.5px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 10px; line-height: 1.5; border: 1px solid; backdrop-filter: blur(14px); }}
+.alert-strip.info {{ background: {C['teal_bg']}; border-color: rgba(100,210,255,0.25); color: {C['teal']}; }}
+.alert-strip.success {{ background: {C['green_bg']}; border-color: rgba(48,209,88,0.25); color: {C['green']}; }}
+.alert-strip.warning {{ background: {C['orange_bg']}; border-color: rgba(255,159,10,0.25); color: {C['orange']}; }}
+.alert-strip.danger {{ background: {C['red_bg']}; border-color: rgba(255,69,58,0.25); color: {C['red']}; }}
 
 .wiz-progress {{ display: flex; gap: 8px; margin-bottom: 28px; }}
-.wiz-dot {{ flex: 1; height: 8px; border-radius: 99px; {neo_inset(99)} }}
+.wiz-dot {{ flex: 1; height: 8px; border-radius: 99px; {glass_inset(99)} }}
 .wiz-dot.done {{ background: linear-gradient(90deg, {C['green']}, {C['teal']}) !important; box-shadow: none; }}
-.wiz-dot.active {{ background: linear-gradient(90deg, {C['primary']}, {C['primary_lt']}) !important; box-shadow: 0 2px 10px rgba(108,92,231,0.35); }}
+.wiz-dot.active {{ background: linear-gradient(90deg, {C['primary']}, {C['teal']}) !important; box-shadow: 0 2px 12px rgba(124,140,255,0.5); }}
 .wiz-step-label {{ font-family: 'Bricolage Grotesque', sans-serif; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: {C['primary']}; margin-bottom: 10px; }}
 
 .level-badge {{
     display: flex; align-items: center; gap: 16px; padding: 18px 22px; border-radius: 20px;
-    background: linear-gradient(135deg, {C['primary_bg']}, {C['gold_bg']});
-    border: 1px solid rgba(108,92,231,0.12);
-    box-shadow: 6px 6px 16px {C['neo_dark']}, -6px -6px 16px {C['neo_light']};
+    background: linear-gradient(135deg, rgba(124,140,255,0.16), rgba(255,180,84,0.10));
+    backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
+    border: 1px solid rgba(255,255,255,0.16); box-shadow: 0 8px 32px rgba(0,0,0,0.3);
 }}
-.level-badge .lvl-icon {{ font-size: 36px; filter: drop-shadow(0 2px 8px rgba(245,158,11,0.35)); }}
+.level-badge .lvl-icon {{ font-size: 36px; filter: drop-shadow(0 2px 10px rgba(255,180,84,0.4)); }}
 .level-badge .lvl-title {{ font-family: 'Bricolage Grotesque', sans-serif; font-size: 18px; font-weight: 800; color: {C['text']}; }}
 .level-badge .lvl-sub {{ font-size: 12.5px; color: {C['text2']}; font-weight: 600; margin-top: 2px; }}
 
-.sb-header {{ background: linear-gradient(150deg, {C['primary_bg']}, {C['bg_warm']}); border-bottom: 1px solid {C['text4']}; padding: 24px 22px; }}
+.sb-header {{ background: linear-gradient(160deg, rgba(124,140,255,0.18), rgba(255,255,255,0.02)); border-bottom: 1px solid rgba(255,255,255,0.08); padding: 24px 22px; }}
 .sb-title {{ font-family: 'Bricolage Grotesque', sans-serif; font-size: 20px; font-weight: 800; color: {C['text']}; }}
 .sb-sub {{ font-size: 11.5px; color: {C['primary']}; margin-top: 3px; font-weight: 700; letter-spacing: .02em; }}
 .sb-section {{ padding: 16px 22px; }}
@@ -446,19 +320,28 @@ div[data-testid="stMetric"] {{
 
 .tip-row {{ display: flex; gap: 14px; align-items: flex-start; padding: 14px 0; border-bottom: 1px solid {C['text4']}; }}
 .tip-row:last-child {{ border-bottom: none; }}
-.tip-num {{ width: 30px; height: 30px; background: linear-gradient(135deg, {C['primary']}, {C['primary_dk']}); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: {C['white']}; flex-shrink: 0; margin-top: 2px; box-shadow: 0 3px 10px rgba(108,92,231,0.30); }}
+.tip-num {{ width: 30px; height: 30px; background: linear-gradient(135deg, {C['primary']}, {C['primary_dk']}); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: {C['white']}; flex-shrink: 0; margin-top: 2px; box-shadow: 0 3px 12px rgba(124,140,255,0.4); }}
 .tip-title {{ font-size: 14px; font-weight: 800; color: {C['text']}; margin-bottom: 3px; }}
 .tip-body {{ font-size: 12.5px; color: {C['text3']}; line-height: 1.6; font-weight: 500; }}
-.tip-group-title {{ font-family: 'Bricolage Grotesque', sans-serif; font-size: 12px; font-weight: 700; letter-spacing: .08em; color: {C['gold_dk']}; padding: 18px 0 6px; text-transform: uppercase; }}
+.tip-group-title {{ font-family: 'Bricolage Grotesque', sans-serif; font-size: 12px; font-weight: 700; letter-spacing: .08em; color: {C['gold']}; padding: 18px 0 6px; text-transform: uppercase; }}
 
-section[data-testid="stSidebar"] .stNumberInput,
-section[data-testid="stSidebar"] .stSlider {{ margin-bottom: 10px !important; }}
+.login-wrap {{ display: flex; justify-content: center; align-items: center; min-height: 78vh; }}
+.login-card {{ {glass(28, 30, 0.08, 0.18)} padding: 44px 40px; max-width: 420px; width: 100%; text-align: center; }}
+.login-icon {{ font-size: 46px; margin-bottom: 14px; filter: drop-shadow(0 4px 16px rgba(124,140,255,0.5)); }}
+.login-title {{ font-family: 'Bricolage Grotesque', sans-serif; font-size: 26px; font-weight: 800; color: {C['text']}; }}
+.login-sub {{ font-size: 13px; color: {C['text3']}; margin: 8px 0 26px; font-weight: 500; line-height: 1.6; }}
+
+.calc-note {{ font-size: 11.5px; color: {C['text3']}; line-height: 1.7; font-weight: 500; }}
+.calc-note code {{ background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 6px; color: {C['teal']}; font-family: 'JetBrains Mono', monospace; }}
+
+section[data-testid="stSidebar"] .stNumberInput, section[data-testid="stSidebar"] .stSlider {{ margin-bottom: 10px !important; }}
 </style>
 """, unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
-# HELPERS
+# HELPERS (unchanged logic from the original app — only the CSS classes
+# they emit have been re-themed above)
 # ─────────────────────────────────────────────
 CATEGORY_ICONS = {
     "Food": "🍛", "Tea / Coffee": "☕", "Travel": "🚌",
@@ -529,9 +412,7 @@ def budget_meter_html(spent, total, color, label="Today's Budget"):
         <span class="budget-meter-title">{label}</span>
         <span class="budget-meter-value" style="color:{color}">{pct:.0f}% used</span>
       </div>
-      <div class="budget-track">
-        <div class="budget-fill" style="width:{pct:.1f}%; background:linear-gradient(90deg,{color},{color}cc);"></div>
-      </div>
+      <div class="budget-track"><div class="budget-fill" style="width:{pct:.1f}%; background:linear-gradient(90deg,{color},{color}cc);"></div></div>
       <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:12px;font-weight:700">
         <span style="color:{C['text3']}">Spent: <span style="color:{color}">{fmt_inr(spent)}</span></span>
         <span style="color:{C['text3']}">Limit: <span style="color:{C['text2']}">{fmt_inr(total)}</span></span>
@@ -540,21 +421,12 @@ def budget_meter_html(spent, total, color, label="Today's Budget"):
     </div>"""
 
 def warn_banner(level, icon, title, body):
-    """level: critical | caution | safe | info-blue"""
-    color_map = {
-        "critical": C['red'],
-        "caution":  C['orange'],
-        "safe":     C['green'],
-        "info-blue": C['teal'],
-    }
+    color_map = {"critical": C['red'], "caution": C['orange'], "safe": C['green'], "info-blue": C['teal']}
     col = color_map.get(level, C['text2'])
     return f"""
     <div class="warn-banner {level}">
       <div class="warn-icon">{icon}</div>
-      <div>
-        <div class="warn-title" style="color:{col}">{title}</div>
-        <div class="warn-body">{body}</div>
-      </div>
+      <div><div class="warn-title" style="color:{col}">{title}</div><div class="warn-body">{body}</div></div>
     </div>"""
 
 def savings_gauge_svg(pct):
@@ -566,19 +438,27 @@ def savings_gauge_svg(pct):
     arc  = C['green'] if pct >= 20 else (C['orange'] if pct >= 10 else C['red'])
     return f"""
     <svg viewBox="0 0 180 180" width="180" height="180" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{C['neo_dark']}" stroke-width="14" opacity="0.4"/>
+      <circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="14"/>
       <circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{arc}" stroke-width="14" stroke-linecap="round"
               stroke-dasharray="{dash:.2f} {gap:.2f}" transform="rotate(-90 {cx} {cy})"/>
       <text x="{cx}" y="{cy-6}" text-anchor="middle" font-family="Bricolage Grotesque,sans-serif" font-weight="800" font-size="26" fill="{C['text']}">{pct:.1f}%</text>
       <text x="{cx}" y="{cy+16}" text-anchor="middle" font-family="Plus Jakarta Sans,sans-serif" font-size="10.5" font-weight="700" fill="{C['text3']}">saved this month</text>
     </svg>"""
 
+def calc_note(text):
+    """Small helper for the 'How is this calculated?' explainer boxes."""
+    st.markdown(f'<div class="calc-note">{text}</div>', unsafe_allow_html=True)
+
 
 # ─────────────────────────────────────────────
-# SESSION STATE
+# SESSION STATE DEFAULTS
 # ─────────────────────────────────────────────
 defaults = {
-    "expenses": [], "setup_done": False, "wiz_step": 0,
+    # auth / navigation
+    "logged_in": False, "user_id": None, "mobile": None,
+    "setup_done": False, "wiz_step": 0, "editing_existing": False,
+    # profile + settings (these column names match db.USER_FIELDS exactly)
+    "name": "Adventurer",
     "salary": 50000, "rent": 8000, "groceries_fix": 3000, "transport_fix": 500,
     "utilities": 700, "phone": 300, "grooming": 500, "other_fixed": 0,
     "gold_inv": 2000, "rd_inv": 1000, "mutual_fund": 500, "emergency_add": 500,
@@ -588,6 +468,30 @@ defaults = {
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+
+def load_user_into_session(user_row: dict):
+    """Copy every saved field from the database row into st.session_state,
+    so all the widgets below pre-fill with this person's own numbers."""
+    st.session_state.user_id = user_row["id"]
+    st.session_state.mobile = user_row["mobile"]
+    for field in db.USER_FIELDS:
+        if field == "name":
+            st.session_state.name = user_row["name"] or "Adventurer"
+        else:
+            st.session_state[field] = user_row[field]
+    st.session_state.setup_done = True
+    st.session_state.logged_in = True
+
+
+def sync_profile_to_db():
+    """Push the current sidebar/session values into the database. Called
+    after every sidebar edit so nothing is ever lost."""
+    if not st.session_state.get("user_id"):
+        return
+    data = {f: st.session_state[f] for f in db.USER_FIELDS if f in st.session_state}
+    db.update_user(st.session_state.user_id, data)
+
 
 def apply_preset(name):
     p = PRESETS[name]
@@ -606,7 +510,49 @@ def apply_preset(name):
 
 
 # ═══════════════════════════════════════════════════════════════
-# ONBOARDING WIZARD
+# LOGIN GATE — the very first thing every visitor sees
+# ═══════════════════════════════════════════════════════════════
+def render_login():
+    st.markdown('<div class="login-wrap">', unsafe_allow_html=True)
+    st.markdown('<div class="login-card">', unsafe_allow_html=True)
+    st.markdown("""
+      <div class="login-icon">⚔️</div>
+      <div class="login-title">Salary Quest</div>
+      <div class="login-sub">Enter your mobile number to continue.<br>
+      New number? We'll set up your character.<br>Returning? We'll load your saved quest.</div>
+    """, unsafe_allow_html=True)
+
+    mobile_input = st.text_input("Mobile Number", max_chars=10, placeholder="9876543210", label_visibility="collapsed", key="login_mobile_input")
+
+    if st.button("Continue →", type="primary", use_container_width=True):
+        mobile = mobile_input.strip()
+        if not db.validate_mobile(mobile):
+            st.error("Enter a valid 10-digit Indian mobile number (starting 6-9).")
+        else:
+            existing = db.get_user_by_mobile(mobile)
+            if existing:
+                load_user_into_session(existing)
+                st.toast(f"⚔️ Welcome back, {existing['name'] or 'Adventurer'}!")
+            else:
+                # brand-new user: send them to the wizard, remember the number
+                st.session_state.logged_in = True
+                st.session_state.mobile = mobile
+                st.session_state.user_id = None
+                st.session_state.setup_done = False
+                st.session_state.wiz_step = 0
+            st.rerun()
+
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+
+if not st.session_state.logged_in:
+    render_login()
+    st.stop()
+
+
+# ═══════════════════════════════════════════════════════════════
+# ONBOARDING WIZARD (shown once for new numbers, or when the user
+# clicks "Edit Character" — in that case fields are pre-filled)
 # ═══════════════════════════════════════════════════════════════
 def render_wizard():
     steps = ["Origin", "Homestead", "Vault", "Ambitions", "Begin"]
@@ -629,9 +575,10 @@ def render_wizard():
     if step == 0:
         st.markdown('<div class="neo-card glow-primary">', unsafe_allow_html=True)
         st.markdown('<div class="sec-title">💰 What treasure flows into your vault each month?</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sec-sub">Your net take-home salary — the gold that actually lands in your account.</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sec-sub">Mobile number: <b>{st.session_state.mobile}</b> · this is how you\'ll log back in.</div>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
+            st.session_state.name   = st.text_input("Your name", value=st.session_state.name)
             st.session_state.salary = st.number_input("Monthly take-home salary (₹)", min_value=0, value=st.session_state.salary, step=500)
         with c2:
             st.session_state.ref_date = st.date_input("Today's date", value=st.session_state.ref_date)
@@ -703,11 +650,11 @@ def render_wizard():
         free         = s.salary - fixed_total - invest_total
         st.markdown('<div class="neo-card glow-gold">', unsafe_allow_html=True)
         st.markdown('<div class="sec-title">✅ Your character sheet is ready</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sec-sub">Looks right? Begin the quest. Everything can be changed later.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-sub">Looks right? Begin the quest. Everything can be changed later from the sidebar — and it will always be saved.</div>', unsafe_allow_html=True)
         r1, r2, r3, r4 = st.columns(4)
         with r1: st.markdown(stat_pill("Salary",         fmt_inr(s.salary)),       unsafe_allow_html=True)
         with r2: st.markdown(stat_pill("Fixed Needs",    fmt_inr(fixed_total),  color=C['teal']),     unsafe_allow_html=True)
-        with r3: st.markdown(stat_pill("Invested",       fmt_inr(invest_total), color=C['gold_dk']),  unsafe_allow_html=True)
+        with r3: st.markdown(stat_pill("Invested",       fmt_inr(invest_total), color=C['gold']),     unsafe_allow_html=True)
         with r4: st.markdown(stat_pill("Free to Spend",  fmt_inr(max(free,0)),  color=C['green'] if free >= 0 else C['red']), unsafe_allow_html=True)
         if free < 0:
             st.markdown(warn_banner("critical","🚨","Over-committed!",
@@ -723,8 +670,19 @@ def render_wizard():
             if st.button("Next →", type="primary", use_container_width=True):
                 st.session_state.wiz_step += 1; st.rerun()
         else:
-            if st.button("⚔️ Begin the Quest", type="primary", use_container_width=True):
-                st.session_state.setup_done = True; st.rerun()
+            label = "💾 Save Changes" if st.session_state.editing_existing else "⚔️ Begin the Quest"
+            if st.button(label, type="primary", use_container_width=True):
+                profile_data = {f: st.session_state[f] for f in db.USER_FIELDS}
+                if st.session_state.user_id:
+                    # existing user editing their profile -> UPDATE their row
+                    db.update_user(st.session_state.user_id, profile_data)
+                else:
+                    # brand-new user -> INSERT a new row, remember the new id
+                    st.session_state.user_id = db.create_user(st.session_state.mobile, profile_data)
+                st.session_state.setup_done = True
+                st.session_state.editing_existing = False
+                st.toast("💾 Saved to database")
+                st.rerun()
 
 if not st.session_state.setup_done:
     render_wizard()
@@ -732,20 +690,30 @@ if not st.session_state.setup_done:
 
 
 # ═══════════════════════════════════════════════════════════════
-# SIDEBAR
+# SIDEBAR — every widget here writes back into st.session_state,
+# and sync_profile_to_db() at the bottom pushes it all into SQLite
+# on every rerun (i.e. every time you touch a field).
 # ═══════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown(f"""
     <div class="sb-header">
-      <div class="sb-title">⚔️ Salary Quest</div>
-      <div class="sb-sub">Your financial adventure log</div>
+      <div class="sb-title">⚔️ {st.session_state.name}</div>
+      <div class="sb-sub">📱 {st.session_state.mobile}</div>
     </div>""", unsafe_allow_html=True)
 
     st.markdown('<div class="sb-section">', unsafe_allow_html=True)
-    if st.button("⚙️ Edit Character", use_container_width=True):
-        st.session_state.setup_done = False
-        st.session_state.wiz_step   = 0
-        st.rerun()
+    ec1, ec2 = st.columns(2)
+    with ec1:
+        if st.button("⚙️ Edit Character", use_container_width=True):
+            st.session_state.setup_done = False
+            st.session_state.wiz_step = 0
+            st.session_state.editing_existing = True
+            st.rerun()
+    with ec2:
+        if st.button("🚪 Logout", use_container_width=True):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="sb-section"><div class="sb-section-title">📅 Today</div>', unsafe_allow_html=True)
@@ -773,11 +741,15 @@ with st.sidebar:
         st.session_state.savings_goal_pct  = st.slider("Target savings %",   5, 50, st.session_state.savings_goal_pct, step=5)
         st.session_state.emergency_months  = st.slider("EF target (months)", 1, 12, st.session_state.emergency_months)
 
+    # ── THIS is the line that makes "edit and it saves" actually true ──
+    sync_profile_to_db()
+
     st.markdown(f"""
     <div style="padding:16px 22px;font-size:11.5px;color:{C['text3']};line-height:1.7;font-weight:600">
       🗓 {st.session_state.ref_date.strftime('%B %Y')} ·
       {calendar.monthrange(st.session_state.ref_date.year, st.session_state.ref_date.month)[1]} days<br>
-      📍 Day {st.session_state.ref_date.day} of the month
+      📍 Day {st.session_state.ref_date.day} of the month<br>
+      💾 Auto-saved to database
     </div>""", unsafe_allow_html=True)
 
 
@@ -801,14 +773,51 @@ savings_goal_pct  = st.session_state.savings_goal_pct
 emergency_months  = st.session_state.emergency_months
 current_ef_saved  = st.session_state.current_ef_saved
 
+# Expenses now live in the database, not just in memory — this is what
+# makes them survive a page refresh or a "log out, log back in" cycle.
+expenses = db.get_expenses(st.session_state.user_id)
+# Turn SQLite's string dates back into real date objects so the rest of
+# the app (which compares dates, groups by date, etc.) works unchanged.
+for e in expenses:
+    e["Date"] = date.fromisoformat(e["date"]) if isinstance(e["date"], str) else e["date"]
+    e["Place"] = e["place"]; e["Amount"] = e["amount"]; e["Payment"] = e["payment"]
+    e["Category"] = e["category"]; e["Type"] = e["type"]; e["Note"] = e["note"]
+
 
 # ═══════════════════════════════════════════════════════════════
 # CALCULATIONS
+# Plain-English summary of every formula below:
+#
+#   fixed_needs   = all your recurring monthly bills added up
+#   total_invest  = all your recurring monthly investments added up
+#   daily_total   = sum of every expense you've logged this month
+#   balance       = salary − fixed bills − investments − logged expenses
+#                   -> "what's left, unspent and uncommitted, right now"
+#
+#   days_remaining = how many days (including today) are left in the month
+#   safe_daily     = balance ÷ days_remaining
+#                   -> "if you spread what's left evenly over the rest
+#                      of the month, this is how much you can spend per day
+#                      without running out before payday"
+#
+#   avg_daily_var   = (money spent so far) ÷ (days that have passed)
+#   proj_var_total  = avg_daily_var × total days in month
+#                   -> "if you kept spending at today's average pace for
+#                      the WHOLE month, this is your total variable spend"
+#   proj_balance    = salary − fixed − investments − proj_var_total
+#                   -> your realistic month-end balance if nothing changes
+#
+#   Level Score (0-100) blends 4 things, weighted by importance:
+#     35% -> are you hitting your savings-rate goal?
+#     20% -> are "Needs" spending under the 50%-of-salary guideline?
+#     20% -> are "Wants" spending under the 30%-of-salary guideline?
+#     25% -> is your emergency fund fully funded?
+#   Being in deficit (balance < 0) subtracts a flat 40-point penalty.
 # ═══════════════════════════════════════════════════════════════
 fixed_needs  = rent + groceries_fix + transport_fix + utilities + phone + grooming + other_fixed
 total_invest = gold_inv + rd_inv + mutual_fund + emergency_add
 total_fixed  = fixed_needs + total_invest
-daily_total  = sum(i["Amount"] for i in st.session_state.expenses)
+daily_total  = sum(i["Amount"] for i in expenses)
 balance      = salary - total_fixed - daily_total
 total_spent  = fixed_needs + daily_total
 
@@ -820,15 +829,15 @@ month_progress = (today.day / days_in_month) * 100
 safe_daily  = balance / days_remaining if days_remaining > 0 else 0
 safe_weekly = safe_daily * 7
 
-spent_today = sum(i["Amount"] for i in st.session_state.expenses if i["Date"] == today)
+spent_today = sum(i["Amount"] for i in expenses if i["Date"] == today)
 left_today  = max(safe_daily - spent_today, 0)
 
 total_saved = total_invest + max(balance, 0)
 saving_pct  = (total_saved / salary * 100) if salary > 0 else 0
 invest_pct  = (total_invest / salary * 100) if salary > 0 else 0
 
-need_consumed = fixed_needs + sum(i["Amount"] for i in st.session_state.expenses if i["Type"] == "Need")
-want_consumed = sum(i["Amount"] for i in st.session_state.expenses if i["Type"] == "Want")
+need_consumed = fixed_needs + sum(i["Amount"] for i in expenses if i["Type"] == "Need")
+want_consumed = sum(i["Amount"] for i in expenses if i["Type"] == "Want")
 need_pct = (need_consumed / salary * 100) if salary > 0 else 0
 want_pct = (want_consumed / salary * 100) if salary > 0 else 0
 
@@ -843,7 +852,7 @@ ef_gap    = max(ef_target - current_ef_saved, 0)
 ef_pct    = min(100, (current_ef_saved / ef_target * 100)) if ef_target > 0 else 100
 
 cat_totals, pay_totals = {}, {}
-for exp in st.session_state.expenses:
+for exp in expenses:
     cat_totals[exp["Category"]] = cat_totals.get(exp["Category"], 0) + exp["Amount"]
     pay_totals[exp["Payment"]]  = pay_totals.get(exp["Payment"], 0)  + exp["Amount"]
 
@@ -878,6 +887,15 @@ if salary > 0:
         <div class="lvl-sub">{level_sub}</div>
       </div>
     </div>""", unsafe_allow_html=True)
+    with st.expander("ℹ️ How is the Level Score calculated?"):
+        calc_note(f"""
+        Score = <code>35% × savings-goal progress</code> + <code>20% × needs-under-50%</code> +
+        <code>20% × wants-under-30%</code> + <code>25% × emergency-fund progress</code>,
+        minus <code>40 points</code> if you're currently in deficit.<br><br>
+        Right now: savings progress {sav_component:.0f}/100, needs score {need_component:.0f}/100,
+        wants score {want_component:.0f}/100, emergency fund {ef_component:.0f}/100
+        {' , minus 40 for being in deficit' if balance_penalty else ''} → total <b>{score}/100</b>.
+        """)
 
 tab_dash, tab_add, tab_expenses, tab_insights, tab_tips = st.tabs([
     "📊 Quest Log", "➕ Log Encounter", "🎒 Inventory", "📈 Chronicle", "📜 Grimoire"
@@ -894,7 +912,7 @@ with tab_dash:
         k1, k2, k3, k4, k5 = st.columns(5)
         with k1: st.markdown(stat_pill("Monthly Salary",  fmt_inr(salary),      "your take-home"),                            unsafe_allow_html=True)
         with k2: st.markdown(stat_pill("Fixed Needs",     fmt_inr(fixed_needs), f"{fixed_needs/salary*100:.0f}% of salary",   C['teal']),    unsafe_allow_html=True)
-        with k3: st.markdown(stat_pill("Invested",        fmt_inr(total_invest),f"{invest_pct:.0f}% of salary",              C['gold_dk']), unsafe_allow_html=True)
+        with k3: st.markdown(stat_pill("Invested",        fmt_inr(total_invest),f"{invest_pct:.0f}% of salary",              C['gold']), unsafe_allow_html=True)
         with k4: st.markdown(stat_pill("Variable Spent",  fmt_inr(daily_total), f"{daily_total/salary*100:.0f}% of salary",  C['orange']),  unsafe_allow_html=True)
         with k5:
             bc = C['green'] if balance >= 0 else C['red']
@@ -911,7 +929,7 @@ with tab_dash:
             st.markdown(f'<div style="text-align:center;margin-top:6px"><span class="tag {tc}">Goal: {savings_goal_pct}%</span></div>', unsafe_allow_html=True)
             st.markdown(f"""
             <div style="margin-top:14px;font-size:12.5px;color:{C['text3']};line-height:2;font-weight:600">
-              Invested: <b style="color:{C['gold_dk']}">{fmt_inr(total_invest)}</b><br>
+              Invested: <b style="color:{C['gold']}">{fmt_inr(total_invest)}</b><br>
               Free: <b style="color:{C['green']}">{fmt_inr(max(balance,0))}</b>
             </div>""", unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
@@ -927,10 +945,10 @@ with tab_dash:
                 ("📱 Bills & Utilities",   utilities+phone,    C['teal']),
                 ("✂️ Grooming",            grooming,           C['teal']),
                 ("📌 Other Fixed",         other_fixed,        C['teal']),
-                ("💛 Gold / SIP",          gold_inv,           C['gold_dk']),
-                ("📈 RD / FD",             rd_inv,             C['gold_dk']),
-                ("📊 Mutual Fund",         mutual_fund,        C['gold_dk']),
-                ("🛟 Emergency Fund",      emergency_add,      C['gold_dk']),
+                ("💛 Gold / SIP",          gold_inv,           C['gold']),
+                ("📈 RD / FD",             rd_inv,             C['gold']),
+                ("📊 Mutual Fund",         mutual_fund,        C['gold']),
+                ("🛟 Emergency Fund",      emergency_add,      C['gold']),
                 ("🍛 Variable Expenses",   daily_total,        C['orange']),
                 ("✅ Free Balance",        max(balance, 0),    C['green']),
             ]
@@ -954,7 +972,7 @@ with tab_dash:
             st.markdown(f"""
             <div style="margin-top:18px">
               <div style="font-size:11px;color:{C['text3']};margin-bottom:7px;font-weight:800;text-transform:uppercase;letter-spacing:.06em">Visual split</div>
-              <div style="display:flex;height:14px;border-radius:99px;overflow:hidden;box-shadow:inset 2px 2px 5px {C['neo_dark']},inset -2px -2px 5px {C['neo_light']}">{segs}</div>
+              <div style="display:flex;height:14px;border-radius:99px;overflow:hidden;{glass_inset(99)}">{segs}</div>
               <div style="display:flex;gap:14px;margin-top:10px;flex-wrap:wrap">{legend}</div>
             </div>""", unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
@@ -980,6 +998,12 @@ with tab_dash:
               <div class="bk-row"><span class="bk-label">Projected Save %</span><span class="bk-val">{proj_save_pct:.1f}%</span></div>
               <div class="bk-row"><span class="bk-label">Level Score</span><span class="bk-val" style="color:{health_color}">{score}/100 · {health_label}</span></div>
             </div>""", unsafe_allow_html=True)
+            with st.expander("ℹ️ How is 'Safe to Spend Today' worked out?"):
+                calc_note(f"""
+                <code>Free Balance ÷ Days Remaining</code><br>
+                {fmt_inr(balance)} ÷ {days_remaining} days = <b>{fmt_inr(safe_daily)}/day</b><br><br>
+                Free Balance itself is <code>Salary − Fixed Bills − Investments − Money Already Spent</code>.
+                """)
             st.markdown('</div>', unsafe_allow_html=True)
 
         # 50/30/20
@@ -1033,15 +1057,13 @@ with tab_dash:
 
 
 # ══════════════════════════════════════════════════════
-# TAB 2 — LOG ENCOUNTER  ← FULLY REBUILT WITH LIVE WARNINGS
+# TAB 2 — LOG ENCOUNTER
 # ══════════════════════════════════════════════════════
 with tab_add:
 
-    # ── TOP STATUS STRIP ────────────────────────────────────────
     if salary > 0:
         today_pct_top = (spent_today / safe_daily * 100) if safe_daily > 0 else 0
 
-        # Choose banner level based on today's status
         if safe_daily <= 0 or balance <= 0:
             top_level, top_icon = "critical", "🚨"
             top_title = "Budget Exhausted — No Safe Spending Left!"
@@ -1073,11 +1095,9 @@ with tab_add:
 
         st.markdown(warn_banner(top_level, top_icon, top_title, top_body), unsafe_allow_html=True)
 
-        # Budget meter bar
         meter_color = C['red'] if today_pct_top >= 100 else C['orange'] if today_pct_top >= 80 else C['green']
         st.markdown(budget_meter_html(spent_today, safe_daily, meter_color, "Today's Budget Meter"), unsafe_allow_html=True)
 
-        # Three KPI pills
         q1, q2, q3 = st.columns(3)
         with q1:
             st.markdown(f"""
@@ -1099,7 +1119,6 @@ with tab_add:
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # Monthly health strip
         mc1, mc2, mc3, mc4 = st.columns(4)
         with mc1: st.markdown(stat_pill("Monthly Spent",     fmt_inr(daily_total),       f"{daily_total/salary*100:.0f}% of salary",    C['orange']), unsafe_allow_html=True)
         with mc2: st.markdown(stat_pill("Projected Balance", fmt_inr(proj_balance),       "at month end",                                C['green'] if proj_balance>=0 else C['red']), unsafe_allow_html=True)
@@ -1116,11 +1135,11 @@ with tab_add:
     for col, (label, cat, amt, typ) in zip(qcols, QUICK_ADD_PRESETS):
         with col:
             if st.button(f"{CATEGORY_ICONS.get(cat,'📌')} {label}\n{fmt_inr(amt)}", key=f"qa_{label}", use_container_width=True):
-                st.session_state.expenses.append({
+                db.add_expense(st.session_state.user_id, {
                     "Date": today, "Place": label, "Amount": float(amt),
                     "Payment": "UPI", "Category": cat, "Type": typ, "Note": "Quick add",
                 })
-                st.toast(f"✅ Logged {fmt_inr(amt)} for {label}")
+                st.toast(f"✅ Logged {fmt_inr(amt)} for {label} · saved to database")
                 st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1141,7 +1160,6 @@ with tab_add:
 
     note = st.text_input("📝 Note (optional)", placeholder="e.g. with friends, office lunch")
 
-    # ── LIVE IMPACT PREVIEW (shows as soon as amount > 0) ───────
     if amount > 0 and salary > 0:
         new_spent_today   = spent_today + amount
         new_left_today    = safe_daily - new_spent_today
@@ -1154,7 +1172,6 @@ with tab_add:
         new_proj_balance  = salary - total_fixed - new_proj_var
         new_proj_save_pct = ((total_invest + max(new_proj_balance,0)) / salary * 100) if salary > 0 else 0
 
-        # Choose warning level for the amount being entered
         if new_balance < 0:
             wlevel, wicon = "critical", "🚨"
             wtitle = f"DANGER: This {fmt_inr(amount)} will push you into deficit!"
@@ -1186,7 +1203,6 @@ with tab_add:
 
         st.markdown(warn_banner(wlevel, wicon, wtitle, wbody), unsafe_allow_html=True)
 
-        # Live impact preview card
         pc = "has-amount"
         st.markdown(f'<div class="preview-card {pc}">', unsafe_allow_html=True)
         st.markdown(f'<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:{C["text3"]};margin-bottom:10px">📊 Live Impact Preview</div>', unsafe_allow_html=True)
@@ -1206,7 +1222,6 @@ with tab_add:
                         f'<span class="preview-val" style="color:{col}">{val}</span></div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Want-specific extra warning
         if need_want == "Want":
             want_after     = want_consumed + amount
             want_pct_after = (want_after / salary * 100) if salary > 0 else 0
@@ -1222,7 +1237,6 @@ with tab_add:
                     f"You'll have <b>{fmt_inr(want_after)}</b> in want spending this month. "
                     f"You have {fmt_inr(salary*0.30 - want_after)} left in your wants budget."), unsafe_allow_html=True)
 
-    # ── ADD BUTTON ───────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("➕ Add Expense", type="primary"):
         if not place.strip():
@@ -1230,26 +1244,25 @@ with tab_add:
         elif amount <= 0:
             st.error("Amount must be greater than ₹0.")
         else:
-            st.session_state.expenses.append({
+            db.add_expense(st.session_state.user_id, {
                 "Date": exp_date, "Place": place.strip(), "Amount": float(amount),
                 "Payment": payment, "Category": category,
                 "Type": need_want, "Note": note.strip(),
             })
-            # Post-add warning toast
             new_bal = salary - total_fixed - (daily_total + amount)
             new_sd  = new_bal / days_remaining if days_remaining > 0 else 0
             if new_bal < 0:
-                st.error(f"🚨 Logged! But your month balance is now {fmt_inr(new_bal)} — you're in deficit!")
+                st.error(f"🚨 Saved to database! But your month balance is now {fmt_inr(new_bal)} — you're in deficit!")
             elif new_sd < 100:
-                st.warning(f"⚠️ Logged! Only {fmt_inr(new_sd)}/day safe budget remains — spend very carefully.")
+                st.warning(f"⚠️ Saved to database! Only {fmt_inr(new_sd)}/day safe budget remains — spend very carefully.")
             else:
-                st.success(f"✅ Logged {fmt_inr(amount)} at {place.strip()} — {fmt_inr(new_sd)}/day left in daily budget.")
+                st.success(f"✅ Saved to database: {fmt_inr(amount)} at {place.strip()} — {fmt_inr(new_sd)}/day left in daily budget.")
             st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
     # ── RECENT ENTRIES ───────────────────────────────────────────
-    if st.session_state.expenses:
-        recent = list(reversed(st.session_state.expenses[-6:]))
+    if expenses:
+        recent = expenses[:6]  # already ordered most-recent-first by the DB query
         st.markdown('<div class="neo-card">', unsafe_allow_html=True)
         st.markdown('<div class="sec-title">🕐 Recent Encounters</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="sec-sub">Last {len(recent)} logged expenses</div>', unsafe_allow_html=True)
@@ -1278,7 +1291,7 @@ with tab_add:
 # TAB 3 — INVENTORY
 # ══════════════════════════════════════════════════════
 with tab_expenses:
-    if not st.session_state.expenses:
+    if not expenses:
         st.markdown(f"""
         <div class="neo-card" style="text-align:center;padding:60px 24px">
           <div style="font-size:48px;margin-bottom:14px">🎒</div>
@@ -1287,25 +1300,25 @@ with tab_expenses:
         </div>""", unsafe_allow_html=True)
     else:
         s1, s2, s3, s4 = st.columns(4)
-        with s1: st.markdown(stat_pill("Total Entries", str(len(st.session_state.expenses))), unsafe_allow_html=True)
+        with s1: st.markdown(stat_pill("Total Entries", str(len(expenses))), unsafe_allow_html=True)
         with s2: st.markdown(stat_pill("Total Spent",   fmt_inr(daily_total),  color=C['orange']), unsafe_allow_html=True)
-        with s3: st.markdown(stat_pill("Needs",  fmt_inr(sum(i["Amount"] for i in st.session_state.expenses if i["Type"]=="Need")), color=C['teal']), unsafe_allow_html=True)
-        with s4: st.markdown(stat_pill("Wants",  fmt_inr(sum(i["Amount"] for i in st.session_state.expenses if i["Type"]=="Want")), color=C['orange']), unsafe_allow_html=True)
+        with s3: st.markdown(stat_pill("Needs",  fmt_inr(sum(i["Amount"] for i in expenses if i["Type"]=="Need")), color=C['teal']), unsafe_allow_html=True)
+        with s4: st.markdown(stat_pill("Wants",  fmt_inr(sum(i["Amount"] for i in expenses if i["Type"]=="Want")), color=C['orange']), unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
         st.markdown('<div class="neo-card">', unsafe_allow_html=True)
         st.markdown('<div class="sec-title">📋 All Encounters</div>', unsafe_allow_html=True)
         f1, f2, f3 = st.columns(3)
         with f1:
-            cats     = ["All"] + sorted(set(i["Category"] for i in st.session_state.expenses))
+            cats     = ["All"] + sorted(set(i["Category"] for i in expenses))
             sel_cat  = st.selectbox("Filter by Category", cats, key="filter_cat")
         with f2:
             sel_type = st.selectbox("Filter by Type", ["All","Need","Want"], key="filter_type")
         with f3:
-            pays     = ["All"] + sorted(set(i["Payment"] for i in st.session_state.expenses))
+            pays     = ["All"] + sorted(set(i["Payment"] for i in expenses))
             sel_pay  = st.selectbox("Filter by Payment", pays, key="filter_pay")
 
-        filtered = [e for e in st.session_state.expenses
+        filtered = [e for e in expenses
                     if (sel_cat  == "All" or e["Category"] == sel_cat)
                     and (sel_type == "All" or e["Type"]     == sel_type)
                     and (sel_pay  == "All" or e["Payment"]  == sel_pay)]
@@ -1317,16 +1330,22 @@ with tab_expenses:
                 icon    = CATEGORY_ICONS.get(exp["Category"], "📌")
                 b_cls   = "badge-need" if exp["Type"] == "Need" else "badge-want"
                 note_str = f" · {exp['Note']}" if exp.get("Note") else ""
-                st.markdown(f"""
-                <div class="exp-row">
-                  <div class="exp-icon">{icon}</div>
-                  <div class="exp-info">
-                    <div class="exp-place">{exp['Place']}</div>
-                    <div class="exp-meta">{PAYMENT_ICONS.get(exp['Payment'],'💳')} {exp['Payment']} · {exp['Category']}{note_str} · {exp['Date']}</div>
-                  </div>
-                  <span class="exp-badge {b_cls}">{exp['Type']}</span>
-                  <span class="exp-amt">{fmt_inr(exp['Amount'])}</span>
-                </div>""", unsafe_allow_html=True)
+                dcol1, dcol2 = st.columns([12, 1])
+                with dcol1:
+                    st.markdown(f"""
+                    <div class="exp-row">
+                      <div class="exp-icon">{icon}</div>
+                      <div class="exp-info">
+                        <div class="exp-place">{exp['Place']}</div>
+                        <div class="exp-meta">{PAYMENT_ICONS.get(exp['Payment'],'💳')} {exp['Payment']} · {exp['Category']}{note_str} · {exp['Date']}</div>
+                      </div>
+                      <span class="exp-badge {b_cls}">{exp['Type']}</span>
+                      <span class="exp-amt">{fmt_inr(exp['Amount'])}</span>
+                    </div>""", unsafe_allow_html=True)
+                with dcol2:
+                    if st.button("🗑", key=f"del_{exp['id']}"):
+                        db.delete_expense(exp['id'])
+                        st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
             with st.expander("📊 View as Table"):
@@ -1347,8 +1366,8 @@ with tab_expenses:
         st.markdown('<div class="neo-card">', unsafe_allow_html=True)
         st.markdown(f'<div class="sec-title" style="color:{C["red"]}">⚠️ Danger Zone</div>', unsafe_allow_html=True)
         if st.button("🗑 Clear All Expenses"):
-            st.session_state.expenses = []
-            st.success("All expenses cleared.")
+            db.clear_expenses(st.session_state.user_id)
+            st.success("All expenses cleared from database.")
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1357,7 +1376,7 @@ with tab_expenses:
 # TAB 4 — INSIGHTS
 # ══════════════════════════════════════════════════════
 with tab_insights:
-    if not st.session_state.expenses or salary == 0:
+    if not expenses or salary == 0:
         st.markdown(f"""
         <div class="neo-card" style="text-align:center;padding:60px 24px">
           <div style="font-size:48px;margin-bottom:14px">📜</div>
@@ -1376,7 +1395,7 @@ with tab_insights:
             st.bar_chart(pay_df.set_index("Method"), color=C['teal'])
 
         st.markdown('<div class="sec-title" style="margin-top:8px">📅 Daily Spending Trend</div>', unsafe_allow_html=True)
-        ddf = pd.DataFrame(st.session_state.expenses)
+        ddf = pd.DataFrame(expenses)
         ddf["Date"] = pd.to_datetime(ddf["Date"])
         dg = ddf.groupby("Date")["Amount"].sum().reset_index()
         dg["Safe Daily"] = safe_daily
